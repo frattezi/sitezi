@@ -29,8 +29,15 @@ const apiHost = import.meta.env.PUBLIC_POSTHOG_HOST ?? 'https://us.i.posthog.com
  * this, not read in the browser.
  *
  * Inline is what makes the `projectToken &&` guard work at all: Astro hoists
- * and bundles a plain <script> regardless of the condition around it, which
- * would load PostHog even with no token configured.
+ * and bundles a non-inline script tag regardless of the condition around it,
+ * which would load PostHog even with no token configured.
+ *
+ * Do not write the literal script tag as plain text anywhere in this file — not
+ * even inside a comment. Astro's script scanner matches it by text, so a comment
+ * containing it swallows everything after it into a virtual script module and
+ * fails to parse. `astro build` misses this (it works from the AST) but the dev
+ * dependency scanner does not, and the only visible symptom is a "Failed to run
+ * dependency scan" error on startup and slow dev reloads.
  *
  * `persistence: 'memory'` keeps everything in memory — no cookie, no
  * localStorage, so there is nothing to consent to and no banner is needed. The
