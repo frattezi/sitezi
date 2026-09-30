@@ -26,6 +26,7 @@ client-side framework. A post is a `.md` file; publishing is a `git push`.
 | Content | Astro Content Layer | — | Collections declared in `src/content.config.ts` with a Zod schema. A typo'd frontmatter field **fails the build** instead of shipping broken HTML. |
 | Language | TypeScript | strict | `astro/tsconfigs/strict`, no `any`. |
 | Hosting | Cloudflare Workers (Static Assets) | — | Free, unlimited static requests, global CDN, and Workers is where Cloudflare is consolidating. No server to pay for. |
+| Infra | [Pulumi](https://www.pulumi.com) | 3.x | The Cloudflare zone and custom domain as TypeScript — same language, same typechecker, same package manager as the site. See [Deploy](#deploy) for what it does and does not own. |
 | Repo | GitHub | — | `frattezi/sitezi` |
 
 ### Choices rejected, and why
@@ -39,8 +40,11 @@ client-side framework. A post is a `.md` file; publishing is a `git push`.
   Astro already did that work.
 - **Cloudflare Pages.** Merged into Workers. New projects should use Workers Static Assets;
   Pages remains for existing ones. Static asset requests are billed identically (free).
-- **S3 + CloudFront + Terraform.** I know how to do it. Hosting HTML does not need an ACM cert,
-  an OAC, and a cache invalidation strategy.
+- **S3 + CloudFront.** I know how to do it. Hosting HTML does not need an ACM cert, an origin
+  access control, and a cache invalidation strategy.
+- **Terraform (HCL).** The same Cloudflare provider Pulumi wraps, so the resources and their
+  semantics are identical. The only thing HCL buys is a second language and a second toolchain in
+  a repo that is already TypeScript end to end. Pulumi's TypeScript SDK is that provider with types.
 - **A headless CMS.** The CMS is `git`. A markdown file in the repo is the draft, the review, the
   history and the publish step in one.
 
@@ -50,6 +54,7 @@ client-side framework. A post is a `.md` file; publishing is a `git push`.
 
 - **Node >= 22.12** (Astro 7's floor). Developed on Node 24.
 - npm (lockfile committed; do not mix package managers).
+- **Pulumi CLI**, for `infra/` only: `brew install pulumi/tap/pulumi`.
 
 ## Commands
 
@@ -64,6 +69,15 @@ npm run format       # prettier write (prettier-plugin-astro)
 ```
 
 `check` and `lint` must pass before a commit. `build` must pass before a push.
+
+Infrastructure is a second, separate npm project in `infra/`:
+
+```bash
+cd infra && npm install   # after changing infra/package.json
+npm run typecheck         # tsc --noEmit — the infra program is typechecked like any other TS
+npm run preview           # pulumi preview — show the diff, create nothing
+npm run up                # pulumi up
+```
 
 ## Project structure
 
@@ -86,10 +100,15 @@ src/
       [...slug].astro      # /blog/<slug> — post page
 public/                    # static files copied verbatim (favicon, robots.txt)
 wrangler.jsonc             # Cloudflare Workers config: serves ./dist as static assets
+infra/                     # Pulumi program — the Cloudflare *account* layer
+  Pulumi.yaml              # project definition
+  Pulumi.dev.yaml          # stack config; created by `pulumi stack init`, committed
+  index.ts                 # the custom domain bound to this site's Worker
 ```
 
 Rule of thumb: `pages/` routes and fetches data, `layouts/` wraps, `components/` renders markup it
-was handed. Anything that queries content lives in `lib/`.
+was handed. Anything that queries content lives in `lib/`. Everything under `infra/` describes
+Cloudflare, not the site.
 
 ## Writing a post
 
@@ -117,31 +136,80 @@ makes it available to every page; adding it only to a post fails the build.
 
 ## Deploy
 
-The site builds to `dist/` and is served by Cloudflare Workers Static Assets. `wrangler.jsonc`
-already points at `./dist` with `not_found_handling: "404-page"`, so a real `dist/404.html`
-is returned for unknown paths instead of an empty 200.
+Two declarative layers, and every resource has exactly one owner. Blur the line and the two tools
+fight over the same Cloudflare object.
 
-Local check of the deploy config (no upload):
+| Layer | Declared in | Owns |
+| --- | --- | --- |
+| Site | `wrangler.jsonc` | the Worker: `name`, `compatibility_date`, `assets.directory`, routes, bindings |
+| Account | `infra/index.ts` | the zone and the custom domain bound to that Worker |
+
+### The rule that keeps them apart
+
+**Pulumi never declares the Worker script.** `wrangler deploy` publishes the bundle and the asset
+manifest on every push. A `cloudflare.WorkersScript` in Pulumi would hold a snapshot of both from
+whenever it was last applied, so the next `pulumi up` would roll the live site back to that stale
+copy. The Worker belongs to wrangler; the hostname belongs to Pulumi.
+
+**The custom domain creates its own DNS.** `WorkersCustomDomain` registers the proxied DNS record
+and provisions the edge certificate. Adding a `cloudflare.DnsRecord` for the same hostname collides
+with the record that resource already manages.
+
+### Site
 
 ```bash
 npm run build
-npx wrangler deploy --dry-run
+npx wrangler deploy --dry-run   # validate the config and the asset list, upload nothing
+npx wrangler deploy             # upload
 ```
 
-Manual deploy, when CI is not the answer:
-
-```bash
-npm run build && npx wrangler deploy
-```
+`wrangler.jsonc` points at `./dist` with `not_found_handling: "404-page"`, so an unknown path gets
+the real `dist/404.html` instead of an empty 200.
 
 **Connect the repo (once, in the Cloudflare dashboard):** Workers & Pages → Create → Workers →
 Import a Git repository. Build command `npm run build`, deploy command `npx wrangler deploy`, root
-directory `/`. Every push to `main` deploys; every branch/PR gets a preview URL. Nothing to
-configure in this repo, and no deploy secrets to rotate — Cloudflare holds its own credentials.
+directory `/`. Every push to `main` deploys; every branch and PR gets a preview URL. Nothing about
+the deploy lives only in that dashboard — `wrangler.jsonc` is the config, and Cloudflare holds its
+own credentials, so there is no deploy secret to rotate.
 
-`site` in `astro.config.mjs` must be the real deployed URL, or the sitemap integration warns and
-skips. Until a domain exists that is the `*.workers.dev` URL; when the domain lands, change `site`
-in one place plus the `routes` block in `wrangler.jsonc`.
+### Account infrastructure
+
+Run from this machine for now. State lives in Pulumi Cloud, not in the repo.
+
+```bash
+brew install pulumi/tap/pulumi
+pulumi login                            # Pulumi Cloud; free for individuals
+cd infra && npm install
+pulumi stack init dev                   # creates Pulumi.dev.yaml — commit it
+pulumi config set accountId <cloudflare-account-id>
+pulumi config set zoneId <cloudflare-zone-id>
+pulumi config set hostname sitezi.com
+pulumi config set workerName sitezi     # must equal `name` in wrangler.jsonc
+export CLOUDFLARE_API_TOKEN=...         # environment only, never a file
+export CLOUDFLARE_ACCOUNT_ID=...
+pulumi preview                          # read the diff before applying
+pulumi up
+```
+
+`workerName` and `wrangler.jsonc`'s `name` are the same string in two files. Change both together or
+the domain binds to a Worker that does not exist.
+
+`Pulumi.dev.yaml` holds non-secret config and is committed. A value set with `pulumi config set
+--secret` is encrypted with the stack's key before it is written, so that is safe to commit as
+well. The account and zone IDs are identifiers, not credentials. The API token is the credential
+and it never touches a file.
+
+Scope the token to the one zone: `Zone:DNS:Edit`, `Zone:Zone:Read`, `Workers:Edit`. Nothing
+account-wide.
+
+### Until the domain exists
+
+`infra/` is inert: no zone to bind, no hostname to serve, nothing to apply. `pulumi preview` fails
+on the missing `zoneId` and `hostname`, which is the truth rather than a bug — the first real apply
+is the day the domain is registered, and it is one resource.
+
+The site's address meanwhile is its `*.workers.dev` subdomain. `site` in `astro.config.mjs` must be
+that URL, or the sitemap integration warns and skips.
 
 ## Not yet — deliberately
 
@@ -149,21 +217,28 @@ Add these when there is a reason, not before:
 
 | Thing | Add when |
 | --- | --- |
-| Custom domain | I buy one. One `site` value + one `wrangler.jsonc` route. |
+| Custom domain | I buy one. One `WorkersCustomDomain` in Pulumi, one `site` value in `astro.config.mjs`. |
+| Pulumi in CI | Infra changes start landing without me at a keyboard, or state needs to be readable from more than one machine. Until then local state in Pulumi Cloud is enough. |
 | RSS feed | Anyone asks, or I syndicate. ~15 lines with `@astrojs/rss`. |
 | Tags / archive | The listing page gets long enough to be hard to scan. |
 | Analytics | I actually want to know something. Then a cookieless option — no third-party script blocking render. |
 | Comments | Almost certainly never. If it happens: giscus (GitHub Discussions). No database. |
 | Dark mode | The design wants it. `prefers-color-scheme` first, a toggle only if asked for. |
-| Lighthouse CI gate | After the first deploy, so the a11y thresholds have a real URL to run against. |
+| Lighthouse CI gate | After the first deploy, so the accessibility thresholds have a real URL to run against. |
 
 ## Decisions log
 
 Append here rather than re-litigating in chat. Newest first.
 
-- **Docs before code.** The stack and the HCI/accessibility rules are written down first so the
-  code has something to conform to. Both files are living — change them in the same commit as the
-  change they describe.
+- **Pulumi over Terraform.** The Cloudflare Terraform provider's resources, expressed as typed
+  TypeScript in the repo's own language and toolchain. The trade is HCL's ubiquity for one less
+  language here; nothing about the resources themselves changes.
+- **Pulumi owns the edge, wrangler owns the Worker.** Two tools writing one Cloudflare resource is
+  how a deploy gets reverted by an unrelated `up`. The boundary is written down in [Deploy](#deploy)
+  so it does not have to be rediscovered.
+- **Docs before code.** The stack, the infrastructure boundary and the accessibility rules are
+  written down first so the code has something to conform to. Both files are living — change them
+  in the same commit as the change they describe.
 - **Cloudflare Workers, not Pages.** Cloudflare merged static hosting into Workers; Workers Static
   Assets is the recommended target for new projects and costs the same.
 - **No adapter.** Pure static output means `@astrojs/cloudflare` is not needed. It is for SSR only,
@@ -171,4 +246,6 @@ Append here rather than re-litigating in chat. Newest first.
 - **Tailwind v4 via the Vite plugin.** `@astrojs/tailwind` is deprecated and unsupported from
   Astro 6 on; `@tailwindcss/vite` in `vite.plugins` is the supported path.
 - **Cloudflare's Git integration over GitHub Actions.** Moving `wrangler deploy` into Actions would
-  mean storing a Cloudflare API token as a repo secret for no benefit.
+  mean storing a Cloudflare API token as a repo secret for no benefit, and `wrangler.jsonc` already
+  holds every deploy setting that matters. Revisit if infra ever needs a pipeline of its own. *(If
+  this ever changes, it is in `infra/`, not Pulumi, so the two decisions are independent.)*

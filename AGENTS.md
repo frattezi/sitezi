@@ -9,7 +9,8 @@ wins**; where they are silent, the global file applies.
 ## What this is
 
 A static personal website: a landing page and a markdown blog. Astro 7, Tailwind v4, content
-collections, deployed to Cloudflare Workers Static Assets.
+collections, deployed to Cloudflare Workers Static Assets. Cloudflare account infrastructure — the
+zone and the custom domain — is declared in Pulumi, in `infra/`.
 
 There is no server, no database, no auth, no API, and no client-side framework. If a change seems
 to need one of those, stop and ask — the answer is almost certainly a different change.
@@ -24,6 +25,14 @@ to need one of those, stop and ask — the answer is almost certainly a differen
 | `npm run check` | `astro check`: TypeScript + content schema. Must pass. |
 | `npm run lint` | ESLint, including accessibility rules. Must pass. |
 | `npm run format` | Prettier write (`prettier-plugin-astro`). |
+
+`infra/` is a second, separate npm project. From inside it:
+
+| Command | Use |
+| --- | --- |
+| `npm run typecheck` | `tsc --noEmit`. Run after any change to `infra/index.ts`. |
+| `npm run preview` | `pulumi preview` — show the diff. Read it. |
+| `npm run up` | `pulumi up`. |
 
 Run the scoped command for what you touched. Never claim success from `dev` alone — dev builds
 posts on demand and does not catch the same errors as a production build.
@@ -48,6 +57,9 @@ These are the mistakes that are easy to make and expensive to undo here.
    concrete beats enthusiastic.
 7. **Never commit `.env`, `dist/`, `.astro/`, or `node_modules/`.** `.gitignore` covers them; do
    not work around it.
+8. **Never let Pulumi and wrangler declare the same Cloudflare resource.** The Worker and its assets
+   belong to `wrangler.jsonc`; the hostname belongs to Pulumi. Violating this rolls the live site
+   back on the next `pulumi up`. See [Infrastructure](#infrastructure).
 
 ## Where things live
 
@@ -60,6 +72,10 @@ src/lib/                content queries and pure helpers
 src/styles/global.css   Tailwind entry + @theme design tokens
 src/pages/              routes only: fetch data, compose components, render
 public/                 copied verbatim — favicon, robots.txt
+wrangler.jsonc          Cloudflare Workers config: serves ./dist as static assets
+infra/                  Pulumi program — the Cloudflare account layer, not the site
+  index.ts              the custom domain bound to this site's Worker
+  Pulumi.yaml           project definition
 ```
 
 One source of truth per concern. If a value, query or style exists in two places, that is the bug.
@@ -116,60 +132,59 @@ One source of truth per concern. If a value, query or style exists in two places
   outside this repo. Trust internal code.
 - Comments only where the reasoning is not obvious from the code.
 
-## HCI — the rules that are not negotiable
+## Infrastructure
 
-HCI here means: the site is usable by a real person, on a phone, on a keyboard, with the system
-they already have configured. These are correctness requirements, not polish.
+The rule that keeps `pulumi up` from reverting a deploy, and the rest of what is easy to get wrong
+here. Full walkthrough in [README → Deploy](README.md#deploy).
 
-**Structure**
+| Layer | Declared in | Owns |
+| --- | --- | --- |
+| Site | `wrangler.jsonc` | the Worker: `name`, `compatibility_date`, `assets.directory`, routes, bindings |
+| Account | `infra/index.ts` | the zone and the custom domain bound to that Worker |
 
-- Semantic HTML first: `<header>`, `<nav>`, `<main>`, `<article>`, `<time datetime>`,
-  `<footer>`. A `<div>` is the fallback, not the default.
-- Anything clickable that is not navigation is a `<button>`. Never `<div onclick>`.
-- Exactly one `<h1>` per page. Headings nest in order — never pick a level for its font size; pick
-  the size with a class.
-- Every page has `<html lang="en">`, a unique `<title>`, and a meta description.
-- Progressive enhancement: the page must be readable and navigable with JavaScript disabled and
-  with CSS disabled. It is the baseline, not an edge case.
+- **Never declare a Worker script in Pulumi.** `wrangler deploy` publishes the bundle and the asset
+  manifest on every push. A `cloudflare.WorkersScript` here would hold a stale snapshot of both,
+  and the next `up` would roll the live site back to it.
+- **Never add a `cloudflare.DnsRecord` for a hostname bound by `WorkersCustomDomain`.** That
+  resource creates the proxied record and provisions the edge certificate itself; a second
+  declaration collides with it.
+- `workerName` in `infra/` and `name` in `wrangler.jsonc` are the same string. Change both in the
+  same commit.
+- Credentials come from `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in the environment.
+  Never a file, never a stack-config value, never a commit.
+- `Pulumi.<stack>.yaml` **is** committed — it holds the stack's non-secret config. A secret goes in
+  with `pulumi config set --secret`, which encrypts it before writing.
+- A key read with `config.require` that nothing sets fails at `preview`, not at compile. So
+  `typecheck` passing does not mean the program runs: read the plan.
+- **Read `pulumi preview` before `pulumi up`.** There is no CI for infra yet, so nothing will catch
+  a destructive plan for you.
+- `infra/` is inert until the zone and hostname are configured. That is expected, not broken.
 
-**Keyboard and focus**
+## Accessibility — short, but not optional
 
-- Everything reachable and operable with Tab/Enter. Tab order follows visual order.
-- Focus is always visible. Never `outline: none` without a replacement of equal visibility.
-- A skip-to-content link is the first focusable element on every page.
+Not a feature request; a property of a page anyone might read. Six rules:
 
-**Perception**
+- Semantic HTML, and exactly one `<h1>` per page. Headings nest; size comes from a class, never
+  from the level.
+- Everything reachable and operable by keyboard, with visible focus. Never a bare `outline: none`.
+- `alt` on every image, `alt=""` when decorative.
+- Contrast ≥ 4.5:1 for body text, 3:1 for large text and UI borders. Measure it, do not eyeball it.
+- Any animation respects `prefers-reduced-motion`. No autoplay, no carousel, no parallax.
+- Link text says where it goes. Never "click here", never a bare "read more".
 
-- Contrast: WCAG AA minimum — 4.5:1 for body text, 3:1 for large text and UI borders. Verify the
-  actual ratio; "it looks fine" is not a measurement.
-- Color is never the only signal. Do not encode meaning in red-vs-green alone.
-- Body measure stays around 60–75 characters. Line height ≥ 1.5 for body copy. Never body text in
-  `text-xs`.
-- Text scales: use relative units (`rem`), and check the layout at 200% zoom.
-- Respect `prefers-color-scheme` and `prefers-reduced-motion`. No autoplaying animation, no
-  carousel, no parallax. If motion exists, `motion-reduce:` must neutralise it.
-- Images carry meaningful `alt`; decorative images use `alt=""`. Always set `width`/`height` so
-  nothing shifts while loading.
-
-**Copy**
-
-- Link text describes the destination. Never "click here", never "read more" on its own.
-- Plain, direct language. Say the thing. No marketing voice, no "we leverage".
-- Touch targets are at least 44×44px, with real spacing between them.
-
-**How this is enforced** — per the no-token-architecture rule, a rule that a machine can check is
-checked by a machine, not remembered by an agent:
+**How this is enforced** — per the no-token-architecture rule, what a machine can check is checked
+by a machine, not remembered by an agent:
 
 | Gate | Catches |
 | --- | --- |
 | `npm run check` | Types, and frontmatter that does not match the schema |
 | `npm run lint` | `eslint-plugin-astro` + a11y rules: missing alt, invalid ARIA, `<div onclick>`, heading order |
 | `npm run build` | A broken post, a bad import, a route that will not prerender |
+| `npm run preview` | The built output — what actually ships, unlike `dev` |
 | Lighthouse CI (after the first deploy) | Rendered contrast, accessible names, SEO metadata, layout shift |
-| `chrome-devtools` MCP `lighthouse_audit`, or the `e2e-browser-check` skill | Visual and interaction checks a linter cannot see |
 
-Linters cover roughly half of this section. The other half is on you: contrast ratios, focus
-visibility, reading measure, and copy need eyes on the rendered page.
+Lint covers roughly half of the rules above. The rest — contrast ratios, focus visibility, reading
+measure — need the rendered page.
 
 ## Definition of done
 
@@ -177,8 +192,10 @@ A change is done when:
 
 1. `npm run check` and `npm run lint` pass.
 2. `npm run build` passes and `npm run preview` shows the change working.
-3. The HCI rules above have been honoured, not just the lintable ones.
-4. `README.md` and this file are updated **in the same commit** if the change affects the stack,
+3. For a change under `infra/`: `npm run typecheck` passes in `infra/`, and the `pulumi preview`
+   diff is what you intended.
+4. The rules above have been honoured, not just the lintable ones.
+5. `README.md` and this file are updated **in the same commit** if the change affects the stack,
    the structure, the commands, or the patterns. They are living documents; a stale one is worse
    than none.
-5. The commit message describes the change, not the process. No task IDs, no spec titles.
+6. The commit message describes the change, not the process. No task IDs, no spec titles.

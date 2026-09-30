@@ -1,26 +1,69 @@
-# dependencies
+# ---------------------------------------------------------------------------
+# Agent harness local state
+# ---------------------------------------------------------------------------
+# Local harness state, not project config. Project skills belong in
+# .agents/skills/ (committed with the repo); global ones in ~/.claude/skills/.
+# A .claude/ directory here is a third-party installer's output, not ours.
+.pi/
+.claude/
+.posthog-wizard-cache/
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
 node_modules/
 
-# astro build output and generated types
+# ---------------------------------------------------------------------------
+# Build output and generated files
+# ---------------------------------------------------------------------------
 dist/
 .astro/
+worker-configuration.d.ts
 
-# cloudflare
+# ---------------------------------------------------------------------------
+# Cloudflare / Wrangler
+# ---------------------------------------------------------------------------
 .wrangler/
+.dev.vars
+.dev.vars.*
 
-# env — never commit secrets
+# ---------------------------------------------------------------------------
+# Pulumi
+# ---------------------------------------------------------------------------
+# Provider plugin binaries and the local state cache. Both are rebuilt by
+# `pulumi up`; neither is source.
+.pulumi/
+
+# Compiled infra program (Pulumi runs index.ts through ts-node, so this is
+# only produced by an explicit build)
+infra/bin/
+
+# Pulumi.<stack>.yaml is deliberately NOT ignored: it holds the stack's
+# non-secret config and belongs in git. Values marked `pulumi config set
+# --secret` are encrypted with the stack's key before they are written.
+
+# ---------------------------------------------------------------------------
+# Secrets
+# ---------------------------------------------------------------------------
 .env
 .env.*
 !.env.example
 
-# logs
+# ---------------------------------------------------------------------------
+# Logs
+# ---------------------------------------------------------------------------
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.pnpm-debug.log*
 
-# os / editor
+# ---------------------------------------------------------------------------
+# Editor and OS
+# ---------------------------------------------------------------------------
 .DS_Store
-*.swp
-
-# agent harness local state (not project config)
-.pi/
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json

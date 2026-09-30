@@ -1,0 +1,3 @@
+name: sitezi
+runtime: nodejs
+description: Cloudflare account infrastructure for sitezi — the zone and the custom domain bound to the site's Worker.
