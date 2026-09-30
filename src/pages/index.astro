@@ -1,0 +1,46 @@
+---
+import Base from '../layouts/Base.astro';
+import { formatDate, getPosts } from '../lib/posts';
+import { site } from '../lib/site';
+
+const posts = await getPosts();
+const recent = posts.slice(0, 3);
+---
+
+<Base title={site.author}>
+  <section>
+    <h1 class="text-3xl font-semibold tracking-tight text-neutral-900">{site.author}</h1>
+    <p class="mt-4 text-lg text-neutral-600">{site.description}</p>
+
+    <p class="mt-6">
+      <a href="/blog/" class="text-neutral-900 underline underline-offset-4">
+        Read the blog
+      </a>
+    </p>
+  </section>
+
+  {recent.length > 0 && (
+    <section class="mt-16" aria-labelledby="recent">
+      <h2 id="recent" class="text-sm font-semibold tracking-wide text-neutral-500 uppercase">
+        Recent writing
+      </h2>
+
+      <ul class="mt-5 space-y-5">
+        {recent.map((post) => (
+          <li>
+            <a href={`/blog/${post.id}/`} class="font-medium text-neutral-900 hover:underline">
+              {post.data.title}
+            </a>
+            <p class="mt-1 text-sm text-neutral-500">
+              <time datetime={post.data.pubDate.toISOString()}>
+                {formatDate(post.data.pubDate)}
+              </time>
+              {' — '}
+              {post.data.description}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )}
+</Base>

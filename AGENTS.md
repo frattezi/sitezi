@@ -3,14 +3,15 @@
 Repo-level rules for this project. Where they conflict with `~/.agents/AGENTS.md`, **this file
 wins**; where they are silent, the global file applies.
 
-> **Status:** these rules were written before the code. The scaffold has not landed yet, so the
-> commands below do not resolve until `package.json` exists. Read them as the target.
+> **Status:** scaffolded but not deployed. The commands below all resolve and pass. There is no
+> domain yet, so `infra/` has nothing to apply and `site` in `astro.config.mjs` is unset on purpose.
 
 ## What this is
 
 A static personal website: a landing page and a markdown blog. Astro 7, Tailwind v4, content
 collections, deployed to Cloudflare Workers Static Assets. Cloudflare account infrastructure — the
-zone and the custom domain — is declared in Pulumi, in `infra/`.
+zone and the custom domain — is declared in Pulumi, in `infra/`. Analytics is PostHog, isolated in
+one conditional component.
 
 There is no server, no database, no auth, no API, and no client-side framework. If a change seems
 to need one of those, stop and ask — the answer is almost certainly a different change.
@@ -44,6 +45,10 @@ These are the mistakes that are easy to make and expensive to undo here.
 1. **No client-side JS unless HTML or CSS cannot do it.** No React, Vue, Svelte, Solid, Alpine, or
    jQuery. No `client:*` directive without a written reason in the commit. A static site that
    ships a framework has thrown away the only reason it exists.
+
+   **One exception exists: `src/components/PostHog.astro`.** Analytics is the one thing HTML and CSS
+   cannot do. It is inline, conditional on a token being configured, and memory-only. Keep it that
+   way: any second client script needs to argue with this rule first, not around it.
 2. **No new dependency without asking.** This repo has a tiny dependency list on purpose. A
    date formatter, an icon, a slug helper — write the six lines, or use `Intl` and the stdlib. If a
    package is genuinely right, say what it saves and what it costs.
@@ -67,11 +72,12 @@ These are the mistakes that are easy to make and expensive to undo here.
 src/content.config.ts   the content contract — schema for every collection
 src/content/blog/       markdown posts; filename is the slug
 src/layouts/Base.astro  <html>, <head>, skip link, header/footer — every page uses it
-src/components/         presentational .astro components
-src/lib/                content queries and pure helpers
+src/components/         presentational .astro components; PostHog.astro is the only client script
+src/lib/posts.ts        the one place posts are queried; drafts filtered and sorted here only
+src/lib/site.ts         author name and default description
 src/styles/global.css   Tailwind entry + @theme design tokens
 src/pages/              routes only: fetch data, compose components, render
-public/                 copied verbatim — favicon, robots.txt
+public/                 copied verbatim — favicon
 wrangler.jsonc          Cloudflare Workers config: serves ./dist as static assets
 infra/                  Pulumi program — the Cloudflare account layer, not the site
   index.ts              the custom domain bound to this site's Worker
@@ -178,19 +184,45 @@ by a machine, not remembered by an agent:
 | Gate | Catches |
 | --- | --- |
 | `npm run check` | Types, and frontmatter that does not match the schema |
-| `npm run lint` | `eslint-plugin-astro` + a11y rules: missing alt, invalid ARIA, `<div onclick>`, heading order |
+| `npm run lint` | Astro's deprecated-API and `valid-compile` rules — nine rules in total |
+| `npm run format:check` | Style only. Says nothing about correctness. |
 | `npm run build` | A broken post, a bad import, a route that will not prerender |
 | `npm run preview` | The built output — what actually ships, unlike `dev` |
 | Lighthouse CI (after the first deploy) | Rendered contrast, accessible names, SEO metadata, layout shift |
 
-Lint covers roughly half of the rules above. The rest — contrast ratios, focus visibility, reading
-measure — need the rendered page.
+**No linter in this repo checks accessibility, and do not claim otherwise.**
+`eslint-plugin-astro`'s recommended set is nine rules with no accessibility rule among them. The
+plugins that would check `alt` and ARIA are not installed, because the site has no images and no
+interactive components to check yet. So all six rules above rest on the person making the change.
+Add those plugins with the first `<img>` or the first interactive component, not before.
+
+## Analytics
+
+PostHog, in `src/components/PostHog.astro`. Read that file before changing it — every constraint in
+it was a bug first.
+
+- **The `<script>` must stay inline, with `define:vars`.** Astro hoists and bundles a plain
+  `<script>` regardless of the condition around it, so a non-inline script loads PostHog even with
+  no token configured. And because an inline script is not processed by Vite, `import.meta.env`
+  cannot be read inside it — the values have to be injected from the frontmatter.
+- **The guard is the point.** Everything sits behind `projectToken &&`. Verify it still holds after
+  touching this file: `PUBLIC_POSTHOG_PROJECT_TOKEN="" npm run build` and confirm
+  `grep -r 'posthog.init' dist/` finds nothing.
+- **`persistence: 'memory'` is a privacy decision, not a config value.** It is what makes the site
+  cookie-free and banner-free. Changing it to `'localStorage+cookie'` needs a consent banner in the
+  same change. Ask first.
+- **Do not add `capture()` calls speculatively.** An event nobody queries is a maintenance cost with
+  no reader. A named event arrives with the question it answers.
+- **No `identify()`, no `reset()`.** There is no auth and no user identity here. Do not invent one —
+  a made-up ID pools unrelated people into one person and corrupts the data.
+- **The file is excluded from Prettier on purpose.** The loader is vendored and minified; formatting
+  it expands what ships and makes it impossible to diff against upstream.
 
 ## Definition of done
 
 A change is done when:
 
-1. `npm run check` and `npm run lint` pass.
+1. `npm run check`, `npm run lint` and `npm run format:check` pass.
 2. `npm run build` passes and `npm run preview` shows the change working.
 3. For a change under `infra/`: `npm run typecheck` passes in `infra/`, and the `pulumi preview`
    diff is what you intended.

@@ -1,0 +1,54 @@
+---
+/**
+ * PostHog browser analytics — the one sanctioned piece of client-side JS here.
+ *
+ * Renders nothing at all unless PUBLIC_POSTHOG_PROJECT_TOKEN is set. So local
+ * dev, `astro preview` and CI builds ship no analytics script and send no local
+ * traffic into the project. Set the variable only where data is wanted.
+ *
+ * This is the only reason `output` is still static-with-a-script rather than
+ * script-free: analytics is the one thing HTML and CSS cannot do. If it is ever
+ * not wanted, delete this file and the single `<PostHog />` line in
+ * src/layouts/Base.astro — nothing else references it.
+ *
+ * `console.log`-free by design: failures here must be silent, not noisy.
+ *
+ * The comments in this file's frontmatter are stripped at build time. Comments
+ * *inside* the script below are not — they ship to the browser — so keep those
+ * to code that cannot explain itself.
+ */
+const projectToken = import.meta.env.PUBLIC_POSTHOG_PROJECT_TOKEN;
+const apiHost = import.meta.env.PUBLIC_POSTHOG_HOST ?? 'https://us.i.posthog.com';
+
+/*
+ * Implementation notes, deliberately not in the script body:
+ *
+ * `define:vars` keeps the script inline and serialises these two values. An
+ * inline script is not processed by Vite, so `import.meta.env` would ship as a
+ * literal reference and throw at runtime — the values have to be injected like
+ * this, not read in the browser.
+ *
+ * Inline is what makes the `projectToken &&` guard work at all: Astro hoists
+ * and bundles a plain <script> regardless of the condition around it, which
+ * would load PostHog even with no token configured.
+ *
+ * `persistence: 'memory'` keeps everything in memory — no cookie, no
+ * localStorage, so there is nothing to consent to and no banner is needed. The
+ * trade is that each page load looks like a new visitor. Switch it to
+ * 'localStorage+cookie' (the PostHog default) when a consent banner exists.
+ */
+---
+
+{
+  projectToken && (
+    <script define:vars={{ projectToken, apiHost }}>
+      !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],Object.defineProperty(u,"toString",{configurable:!0,enumerable:!0,writable:!0,value:function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e}}),Object.defineProperty(u.people,"toString",{configurable:!0,enumerable:!0,writable:!0,value:function(){return u.toString(1)+".people (stub)"}}),o="capture identify alias people.set people.set_once set_config register register_once unregister opt_out_capturing has_opted_out_capturing opt_in_capturing reset isFeatureEnabled onFeatureFlags getFeatureFlag getFeatureFlagResult reloadFeatureFlags group updateEarlyAccessFeatureEnrollment getActiveEarlyAccessFeatures getActiveMatchingSurveys getSurveys getNextSurveyStep onSessionId".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+
+      posthog.init(projectToken, {
+        api_host: apiHost,
+        defaults: '2026-05-30',
+        persistence: 'memory',
+      });
+    </script>
+  )
+}

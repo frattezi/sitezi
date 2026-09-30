@@ -1,12 +1,12 @@
-import * as cloudflare from "@pulumi/cloudflare";
-import * as pulumi from "@pulumi/pulumi";
+import * as cloudflare from '@pulumi/cloudflare';
+import * as pulumi from '@pulumi/pulumi';
 
 const config = new pulumi.Config();
 
-const accountId = config.require("accountId");
-const zoneId = config.require("zoneId");
-const hostname = config.require("hostname");
-const workerName = config.require("workerName");
+const accountId = config.require('accountId');
+const zoneId = config.require('zoneId');
+const hostname = config.require('hostname');
+const workerName = config.require('workerName');
 
 /**
  * This program owns the Cloudflare *account* infrastructure: the hostname that
@@ -21,7 +21,7 @@ const workerName = config.require("workerName");
  * edge certificate, so there must be no cloudflare.DnsRecord for this hostname
  * — declaring one collides with the record this resource manages.
  */
-export const siteDomain = new cloudflare.WorkersCustomDomain("site", {
+export const siteDomain = new cloudflare.WorkersCustomDomain('site', {
   accountId,
   zoneId,
   hostname,

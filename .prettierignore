@@ -1,0 +1,17 @@
+# Vendored, minified third-party code — PostHog's loader snippet. Formatting it
+# turns ~1 KB of shipped script into ~60 lines and makes it impossible to diff
+# against upstream when PostHog updates it.
+src/components/PostHog.astro
+
+# Markdown is hand-wrapped. Prettier's only markdown change here is padding table
+# columns, which re-diffs every row of a table when one cell is edited.
+*.md
+
+dist/
+.astro/
+node_modules/
+package-lock.json
+infra/package-lock.json
+infra/bin/
+.pulumi/
+.claude/

@@ -10,9 +10,10 @@ Two URLs matter:
 Everything here is boring on purpose: static HTML out, no runtime, no database, no CMS, no
 client-side framework. A post is a `.md` file; publishing is a `git push`.
 
-> **Status: documentation first.** This README and `AGENTS.md` are the project's basis and were
-> written before the code. Nothing is deployed yet. Sections describing files that do not exist
-> yet are the target, not a description of what is on disk — keep this in sync as they land.
+> **Status: built, not deployed.** The site builds, typechecks, lints and renders locally, and
+> `wrangler deploy --dry-run` accepts the config. It is not on Cloudflare yet and has no domain, so
+> `infra/` is deliberately inert. Analytics is wired but only activates where a project token is
+> set.
 
 ---
 
@@ -27,6 +28,7 @@ client-side framework. A post is a `.md` file; publishing is a `git push`.
 | Language | TypeScript | strict | `astro/tsconfigs/strict`, no `any`. |
 | Hosting | Cloudflare Workers (Static Assets) | — | Free, unlimited static requests, global CDN, and Workers is where Cloudflare is consolidating. No server to pay for. |
 | Infra | [Pulumi](https://www.pulumi.com) | 3.x | The Cloudflare zone and custom domain as TypeScript — same language, same typechecker, same package manager as the site. See [Deploy](#deploy) for what it does and does not own. |
+| Analytics | [PostHog](https://posthog.com) | — | Pageviews and referrers. One inline script, rendered only when a token is configured, with memory-only persistence so there is no cookie and nothing to consent to. The single exception to "no client-side JS". See [Analytics](#analytics). |
 | Repo | GitHub | — | `frattezi/sitezi` |
 
 ### Choices rejected, and why
@@ -55,6 +57,8 @@ client-side framework. A post is a `.md` file; publishing is a `git push`.
 - **Node >= 22.12** (Astro 7's floor). Developed on Node 24.
 - npm (lockfile committed; do not mix package managers).
 - **Pulumi CLI**, for `infra/` only: `brew install pulumi/tap/pulumi`.
+- **A PostHog project token**, only if analytics should run locally. Optional — without it the site
+  builds fine and ships no analytics script at all.
 
 ## Commands
 
@@ -88,17 +92,20 @@ src/
     blog/                  # one markdown file per post; filename = URL slug
   layouts/
     Base.astro             # <html>, <head>, skip link, header/footer. Every page uses it.
-  components/              # small presentational .astro components
+  components/
+    PostHog.astro          # analytics — the only client-side script, and it is conditional
   lib/
     posts.ts               # the ONE place posts are queried and drafts are filtered out
+    site.ts                # author name and the default description
   styles/
     global.css             # Tailwind entry + @theme design tokens
   pages/
     index.astro            # /
+    404.astro              # dist/404.html, served by wrangler's not_found_handling
     blog/
       index.astro          # /blog — post listing
       [...slug].astro      # /blog/<slug> — post page
-public/                    # static files copied verbatim (favicon, robots.txt)
+public/                    # static files copied verbatim (favicon)
 wrangler.jsonc             # Cloudflare Workers config: serves ./dist as static assets
 infra/                     # Pulumi program — the Cloudflare *account* layer
   Pulumi.yaml              # project definition
@@ -208,8 +215,38 @@ account-wide.
 on the missing `zoneId` and `hostname`, which is the truth rather than a bug — the first real apply
 is the day the domain is registered, and it is one resource.
 
-The site's address meanwhile is its `*.workers.dev` subdomain. `site` in `astro.config.mjs` must be
-that URL, or the sitemap integration warns and skips.
+The site's address meanwhile is its `*.workers.dev` subdomain. `site` in `astro.config.mjs` is
+intentionally unset until there is a real URL: a placeholder there would emit wrong canonical URLs
+and wrong sitemap entries, which is worse than the missing feature. Set `site` and add back
+`@astrojs/sitemap` in the same commit, once the URL is known.
+
+## Analytics
+
+PostHog, in `src/components/PostHog.astro`, mounted once from `Base.astro`. The full reasoning lives
+in that file's comments; the operational parts are here.
+
+```bash
+# .env — the same two names in every deploy environment, not just locally
+PUBLIC_POSTHOG_PROJECT_TOKEN=phc_...
+PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+```
+
+- **No token, no script.** The component renders nothing unless `PUBLIC_POSTHOG_PROJECT_TOKEN` is
+  set. `npm run build` with the variable empty emits zero analytics markup — verified against the
+  built output, not assumed. So local dev, `astro preview` and CI stay out of the data without
+  anyone having to remember to opt out.
+- **Inline, not bundled.** The script must stay inline: Astro hoists and bundles a plain `<script>`
+  regardless of the condition around it, which would load PostHog even with no token configured.
+  Inline is also why `define:vars` injects the values — an inline script is not processed by Vite,
+  so `import.meta.env` would ship as a literal reference and throw at runtime.
+- **No cookie, no banner.** `persistence: 'memory'` keeps everything in memory, so there is nothing
+  to consent to. The trade is that each page load looks like a new visitor. If a consent banner ever
+  exists, switch that one value to `'localStorage+cookie'` and nothing else changes.
+- **Zero bytes on the critical path.** The built site contains no JavaScript bundle — HTML and CSS
+  only, plus the inline loader. The loader is async, and PostHog's own `array.js` is fetched from
+  their CDN afterwards.
+- **To remove analytics entirely:** delete `src/components/PostHog.astro` and its single import line
+  in `src/layouts/Base.astro`. Nothing else references it.
 
 ## Not yet — deliberately
 
@@ -220,8 +257,10 @@ Add these when there is a reason, not before:
 | Custom domain | I buy one. One `WorkersCustomDomain` in Pulumi, one `site` value in `astro.config.mjs`. |
 | Pulumi in CI | Infra changes start landing without me at a keyboard, or state needs to be readable from more than one machine. Until then local state in Pulumi Cloud is enough. |
 | RSS feed | Anyone asks, or I syndicate. ~15 lines with `@astrojs/rss`. |
+| Sitemap | There is a real URL to put in `site`. `@astrojs/sitemap` warns and skips without one, and a placeholder URL would emit wrong entries. Add both together. |
+| Per-post capture events | Pageviews turn out not to be enough. Then a named event per real action — never before, since an event nobody queries is a maintenance cost with no reader. |
+| `alt`/ARIA linting | The site gains images or interactive components. `eslint-plugin-astro`'s recommended set is 9 rules and contains no accessibility rules; adding them means another plugin, which is not worth it while there is nothing to check. |
 | Tags / archive | The listing page gets long enough to be hard to scan. |
-| Analytics | I actually want to know something. Then a cookieless option — no third-party script blocking render. |
 | Comments | Almost certainly never. If it happens: giscus (GitHub Discussions). No database. |
 | Dark mode | The design wants it. `prefers-color-scheme` first, a toggle only if asked for. |
 | Lighthouse CI gate | After the first deploy, so the accessibility thresholds have a real URL to run against. |
@@ -230,15 +269,30 @@ Add these when there is a reason, not before:
 
 Append here rather than re-litigating in chat. Newest first.
 
+- **PostHog for analytics, memory-only.** Wanted pageviews and referrers without a consent banner or
+  a third-party script on the critical path. `persistence: 'memory'` is what buys the no-banner part;
+  the cost is per-page-load visitor identity, which a blog has no use for. The one sanctioned
+  exception to the no-client-side-JS rule, isolated to a single component.
+- **PostHog's loader is vendored, not installed.** `posthog-js` as a dependency would put tens of KB
+  in our bundle and — worse — be hoisted by Astro, breaking the "no token, no script" guard. The
+  inline snippet is PostHog's own documented Astro path. It is excluded from Prettier, because
+  formatting it expands what ships for no benefit.
+- **Prettier ignores markdown.** Its only change to hand-wrapped prose is padding table columns,
+  which re-diffs every row of a table when one cell is edited.
+- **ESLint is kept for 9 Astro rules, not for accessibility.** `astro check` already type-checks
+  everything, so the linter's value here is the deprecated-API and valid-compile rules. It needs
+  `typescript-eslint` purely to parse the TypeScript in `.astro` frontmatter. If it ever costs more
+  than it catches, delete it and keep `check`.
 - **Pulumi over Terraform.** The Cloudflare Terraform provider's resources, expressed as typed
   TypeScript in the repo's own language and toolchain. The trade is HCL's ubiquity for one less
   language here; nothing about the resources themselves changes.
 - **Pulumi owns the edge, wrangler owns the Worker.** Two tools writing one Cloudflare resource is
   how a deploy gets reverted by an unrelated `up`. The boundary is written down in [Deploy](#deploy)
   so it does not have to be rediscovered.
-- **Docs before code.** The stack, the infrastructure boundary and the accessibility rules are
-  written down first so the code has something to conform to. Both files are living — change them
-  in the same commit as the change they describe.
+- **Docs before code — and after it.** The stack, the infrastructure boundary and the accessibility
+  rules were written before the code so it had something to conform to. Both files are living: change
+  them in the same commit as the change they describe, including when the change is that a
+  documented claim turned out to be wrong.
 - **Cloudflare Workers, not Pages.** Cloudflare merged static hosting into Workers; Workers Static
   Assets is the recommended target for new projects and costs the same.
 - **No adapter.** Pure static output means `@astrojs/cloudflare` is not needed. It is for SSR only,

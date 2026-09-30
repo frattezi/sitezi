@@ -1,0 +1,8 @@
+@import 'tailwindcss';
+@plugin '@tailwindcss/typography';
+
+/*
+ * Tailwind's own palette is the token set for now — `text-neutral-800` and
+ * friends are tokens, not raw values. Add @theme entries here only when a value
+ * stops being expressible as a utility.
+ */
